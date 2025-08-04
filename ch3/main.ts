@@ -5,14 +5,23 @@ type Token =
   | { tag: 'false' }
   | { tag: 'if' }
   | { tag: 'then' }
-  | { tag: 'else' };
+  | { tag: 'else' }
+  | { tag: '0' }
+  | { tag: 'succ' }
+  | { tag: 'pred' }
+  | { tag: 'iszero' };
 
 type Term =
   | { tag: 'true' }
   | { tag: 'false' }
-  | { tag: 'if'; t1: Term; t2: Term; t3: Term };
+  | { tag: 'if'; t1: Term; t2: Term; t3: Term }
+  | { tag: '0' }
+  | { tag: 'succ'; t1: Term }
+  | { tag: 'pred'; t1: Term }
+  | { tag: 'iszero'; t1: Term };
 
-type Value = Extract<Term, { tag: 'true' } | { tag: 'false' }>;
+type Value = { tag: 'true' } | { tag: 'false' } | NValue;
+type NValue = { tag: '0' } | { tag: 'succ'; t1: NValue };
 
 const lex = (src: string): Token[] => {
   const tokens: Token[] = [];
@@ -28,13 +37,13 @@ const lex = (src: string): Token[] => {
       continue;
     }
 
-    if (/[a-z]/.test(src[i])) {
+    if (/[a-z0-9]/.test(src[i])) {
       const begin = i;
       while (true) {
         if (i === src.length) {
           break;
         }
-        if (!/[a-z]/.test(src[i])) {
+        if (!/[a-z0-9]/.test(src[i])) {
           break;
         }
         i++;
@@ -57,6 +66,18 @@ const lex = (src: string): Token[] => {
             }
             case 'else': {
               return { tag: 'else' };
+            }
+            case '0': {
+              return { tag: '0' };
+            }
+            case 'succ': {
+              return { tag: 'succ' };
+            }
+            case 'pred': {
+              return { tag: 'pred' };
+            }
+            case 'iszero': {
+              return { tag: 'iszero' };
             }
             default: {
               throw new Error(`invalid str: ${str}`);
@@ -114,6 +135,18 @@ const parse = (tokens: Token[]): Term => {
       case 'else': {
         throw new Error('unreachable else');
       }
+      case '0': {
+        return { tag: '0' };
+      }
+      case 'succ': {
+        return { tag: 'succ', t1: parse1() };
+      }
+      case 'pred': {
+        return { tag: 'pred', t1: parse1() };
+      }
+      case 'iszero': {
+        return { tag: 'iszero', t1: parse1() };
+      }
     }
   };
 
@@ -127,24 +160,84 @@ const parse = (tokens: Token[]): Term => {
 const evaluate = (term: Term): Value => {
   const step = (term: Term): Term | null => {
     switch (term.tag) {
+      case 'true':
+        return null;
+      case 'false':
+        return null;
       case 'if': {
         switch (term.t1.tag) {
           case 'true':
+            // E-IfTrue
             return term.t2;
           case 'false':
+            // E-IfFalse
             return term.t3;
           default: {
+            // E-If
             const t = step(term.t1);
             if (!t) {
-              throw new Error(`stuck: ${JSON.stringify(term.t1)}`);
+              return null;
             }
             return { ...term, t1: t };
           }
         }
       }
-      default:
+      case '0':
         return null;
+      case 'succ': {
+        // E-Succ
+        const t1 = step(term.t1);
+        if (!t1) {
+          return null;
+        }
+        return { ...term, t1 };
+      }
+      case 'pred': {
+        switch (term.t1.tag) {
+          case '0':
+            // E-PredZero
+            return term.t1;
+          default: {
+            // E-PredSucc
+            if (term.t1.tag === 'succ' && isNValue(term.t1.t1)) {
+              return term.t1.t1;
+            }
+            // E-Pred
+            const t1 = step(term.t1);
+            if (!t1) {
+              return null;
+            }
+            return { ...term, t1 };
+          }
+        }
+      }
+      case 'iszero':
+        switch (term.t1.tag) {
+          case '0':
+            // E-IszeroZero
+            return { tag: 'true' };
+          default: {
+            // E-IszeroSucc
+            if (term.t1.tag === 'succ' && isNValue(term.t1.t1)) {
+              return { tag: 'false' };
+            }
+            // E-Iszero
+            const t1 = step(term.t1);
+            if (!t1) {
+              return null;
+            }
+            return { ...term, t1 };
+          }
+        }
     }
+  };
+
+  const isNValue = (term: Term): term is NValue => {
+    return term.tag === '0' || (term.tag === 'succ' && isNValue(term.t1));
+  };
+
+  const isValue = (term: Term): term is Value => {
+    return term.tag === 'true' || term.tag === 'false' || isNValue(term);
   };
 
   // evaluate by small-step
@@ -158,8 +251,8 @@ const evaluate = (term: Term): Value => {
   }
 
   // assert value
-  if (!(cur.tag === 'true' || cur.tag === 'false')) {
-    throw new Error(`eval wrong: ${JSON.stringify(cur)}`);
+  if (!isValue(cur)) {
+    throw new Error(`stuck term: ${JSON.stringify(cur)}`);
   }
 
   return cur;
